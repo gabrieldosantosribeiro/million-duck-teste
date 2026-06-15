@@ -246,14 +246,8 @@ export default function Modal({ blockIndex, availablePixels, onClose, onPurchase
             {mpReady && (
               <Payment
                 initialization={{ amount: config.amount }}
-                customization={{
-                  paymentMethods: {
-                    maxInstallments: 1,
-                    creditCard: 'all',
-                    debitCard: 'all',
-                    bankTransfer: 'all',
-                  } as any,
-                }}
+                locale="pt-BR"
+                customization={undefined as any}
                 onSubmit={handleSubmitPayment as any}
                 onError={onError as any}
               />
