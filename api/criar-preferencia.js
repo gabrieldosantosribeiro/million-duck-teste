@@ -1,6 +1,14 @@
 const MP_API_URL = 'https://api.mercadopago.com/checkout/preferences';
 
 export default async function handler(req, res) {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+
+  if (req.method === 'OPTIONS') {
+    return res.status(200).end();
+  }
+
   if (req.method !== 'POST') {
     res.setHeader('Allow', 'POST');
     return res.status(405).json({ error: 'Method not allowed' });
@@ -26,9 +34,8 @@ export default async function handler(req, res) {
     return res.status(500).json({ error: 'MP_ACCESS_TOKEN não configurado.' });
   }
 
-  const siteUrl = process.env.SITE_URL || 'http://localhost:5173';
+  const siteUrl = process.env.SITE_URL || `https://${req.headers.host || 'localhost:5173'}`;
   const isSandbox = process.env.MP_SANDBOX === 'true';
-  const webhookUrl = process.env.MP_WEBHOOK_URL || '';
 
   const blockRow = Math.floor(blockIndex / 10) + 1;
   const blockCol = (blockIndex % 10) + 1;
@@ -36,14 +43,13 @@ export default async function handler(req, res) {
   const preference = {
     items: [
       {
-        title: `${quantidade} pixels — Bloco ${blockRow}×${blockCol} | Million Duck`,
+        title: `${quantidade} pixels — Bloco ${blockRow}x${blockCol} | Million Duck`,
         unit_price: Number(quantidade),
         quantity: 1,
         currency_id: 'BRL',
       },
     ],
     payer: {
-      name: nome.trim(),
       email: email.trim(),
     },
     back_urls: {
@@ -58,11 +64,14 @@ export default async function handler(req, res) {
     },
   };
 
+  const webhookUrl = process.env.MP_WEBHOOK_URL;
   if (webhookUrl) {
     preference.notification_url = webhookUrl;
   }
 
   try {
+    console.log('Sending to MP:', JSON.stringify({ ...preference, items: [{ ...preference.items[0], title: '...' }] }));
+
     const mpRes = await fetch(MP_API_URL, {
       method: 'POST',
       headers: {
@@ -72,14 +81,28 @@ export default async function handler(req, res) {
       body: JSON.stringify(preference),
     });
 
+    const responseText = await mpRes.text();
+
     if (!mpRes.ok) {
-      const errorBody = await mpRes.text().catch(() => '');
-      console.error('Mercado Pago API error:', mpRes.status, errorBody);
-      return res.status(502).json({ error: 'Erro ao comunicar com Mercado Pago.' });
+      console.error('Mercado Pago error:', mpRes.status, responseText);
+      const detail = responseText.slice(0, 500);
+      return res.status(502).json({
+        error: `Mercado Pago retornou erro ${mpRes.status}: ${detail}`,
+      });
     }
 
-    const mpData = await mpRes.json();
+    let mpData;
+    try {
+      mpData = JSON.parse(responseText);
+    } catch {
+      return res.status(502).json({ error: 'Resposta inválida do Mercado Pago.' });
+    }
+
     const checkoutUrl = isSandbox ? mpData.sandbox_init_point : mpData.init_point;
+
+    if (!checkoutUrl) {
+      return res.status(502).json({ error: 'Mercado Pago não retornou URL de checkout.' });
+    }
 
     return res.status(200).json({
       checkoutUrl,
@@ -87,6 +110,9 @@ export default async function handler(req, res) {
     });
   } catch (err) {
     console.error('Error creating preference:', err);
-    return res.status(500).json({ error: 'Erro interno do servidor.' });
+    return res.status(500).json({
+      error: 'Erro interno do servidor.',
+      detail: err instanceof Error ? err.message : 'Erro desconhecido',
+    });
   }
 }

@@ -59,7 +59,8 @@ export default function Modal({ blockIndex, availablePixels, onClose }: ModalPro
 
       if (!res.ok) {
         const errData = await res.json().catch(() => ({}))
-        throw new Error(errData.error || 'Erro ao criar preferência de pagamento.')
+        const msg = errData.detail ? `${errData.error}: ${errData.detail}` : (errData.error || 'Erro ao criar preferência de pagamento.')
+        throw new Error(msg)
       }
 
       const data = await res.json()
