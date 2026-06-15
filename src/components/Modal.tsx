@@ -1,4 +1,5 @@
 import { useState, useEffect, FormEvent, useRef } from 'react'
+import { initMercadoPago, Payment } from '@mercadopago/sdk-react'
 
 interface ModalProps {
   blockIndex: number
@@ -21,20 +22,6 @@ function getBlockRowCol(blockIndex: number): [number, number] {
   return [Math.floor(blockIndex / 10) + 1, (blockIndex % 10) + 1]
 }
 
-declare global {
-  interface Window {
-    MercadoPago: new (key: string) => {
-      bricks: () => {
-        create: (
-          type: 'payment',
-          containerId: string,
-          config: Record<string, unknown>,
-        ) => Promise<unknown>
-      }
-    }
-  }
-}
-
 export default function Modal({ blockIndex, availablePixels, onClose, onPurchase }: ModalProps) {
   const [step, setStep] = useState<Step>('form')
   const [nome, setNome] = useState('')
@@ -44,7 +31,7 @@ export default function Modal({ blockIndex, availablePixels, onClose, onPurchase
   const [config, setConfig] = useState<BrickConfig | null>(null)
   const [loading, setLoading] = useState(false)
   const [pixPaymentId, setPixPaymentId] = useState<number | null>(null)
-  const brickReady = useRef(false)
+  const [mpReady, setMpReady] = useState(false)
 
   const onPurchaseRef = useRef(onPurchase)
   onPurchaseRef.current = onPurchase
@@ -59,91 +46,12 @@ export default function Modal({ blockIndex, availablePixels, onClose, onPurchase
   const totalPrice = quantidade
 
   useEffect(() => {
-    brickReady.current = false
-  }, [])
+    if (!config || mpReady) return
+    initMercadoPago(config.publicKey)
+    setMpReady(true)
+  }, [config, mpReady])
 
-  useEffect(() => {
-    if (step !== 'brick' || !config || brickReady.current) return
-    brickReady.current = true
-
-    const mp = new window.MercadoPago(config.publicKey)
-    const bricksBuilder = mp.bricks()
-
-    bricksBuilder.create('payment', 'paymentBrick_container', {
-      initialization: {
-        amount: config.amount,
-        payer: { email },
-      },
-      customization: {
-        paymentMethods: {
-          types: { included: ['credit_card', 'debit_card', 'pix'] },
-        },
-      },
-      callbacks: {
-        onSubmit: async ({ selectedPaymentMethod, formData }: { selectedPaymentMethod: string; formData: Record<string, unknown> }) => {
-          const body: Record<string, unknown> = {
-            ...formData,
-            amount: config.amount,
-            email,
-            nome,
-            description: config.description,
-          }
-          const res = await fetch('/api/process-payment', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(body),
-          })
-          const data = await res.json()
-          if (!res.ok) throw new Error(data.error)
-
-          if (selectedPaymentMethod === 'pix') {
-            setPixPaymentId(data.id)
-            return data
-          }
-
-          if (data.status === 'approved') {
-            onPurchaseRef.current(blockIndexRef.current, quantidadeRef.current)
-            setStep('success')
-            setTimeout(() => onCloseRef.current(), 2500)
-          } else {
-            throw new Error(`Pagamento ${data.status}: ${data.statusDetail || ''}`)
-          }
-          return data
-        },
-        onReady: () => {},
-        onError: (error: { message?: string }) => {
-          setErrorMsg(error?.message || 'Erro no formulário de pagamento.')
-          setStep('error')
-        },
-      },
-    }).catch((error: { message?: string }) => {
-      setErrorMsg(error?.message || 'Falha ao carregar formulário de pagamento.')
-      setStep('error')
-    })
-  }, [step, config, email, nome])
-
-  useEffect(() => {
-    if (!pixPaymentId) return
-    const interval = setInterval(async () => {
-      try {
-        const res = await fetch('/api/process-payment', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ checkPaymentId: pixPaymentId }),
-        })
-        const data = await res.json()
-        if (data.status === 'approved') {
-          clearInterval(interval)
-          onPurchaseRef.current(blockIndexRef.current, quantidadeRef.current)
-          setStep('success')
-          setTimeout(() => onCloseRef.current(), 2500)
-        }
-      } catch { /* keep polling */ }
-    }, 3000)
-    return () => clearInterval(interval)
-  }, [pixPaymentId])
-
-  const handleFormSubmit = async (e: FormEvent) => {
+  const handleSubmit = async (e: FormEvent) => {
     e.preventDefault()
     setErrorMsg('')
 
@@ -173,11 +81,70 @@ export default function Modal({ blockIndex, availablePixels, onClose, onPurchase
     }
   }
 
+  const handleSubmitPayment = async (param: {
+    selectedPaymentMethod: string
+    formData: Record<string, unknown>
+  }) => {
+    const body: Record<string, unknown> = {
+      ...param.formData,
+      amount: config!.amount,
+      email,
+      nome,
+      description: config!.description,
+    }
+    const res = await fetch('/api/process-payment', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+    const data = await res.json()
+    if (!res.ok) throw new Error(data.error)
+
+    if (param.selectedPaymentMethod === 'bank_transfer') {
+      setPixPaymentId(data.id)
+      return
+    }
+
+    if (data.status === 'approved') {
+      onPurchaseRef.current(blockIndexRef.current, quantidadeRef.current)
+      setStep('success')
+      setTimeout(() => onCloseRef.current(), 2500)
+    } else {
+      throw new Error(`Pagamento ${data.status}: ${data.statusDetail || ''}`)
+    }
+  }
+
+  useEffect(() => {
+    if (!pixPaymentId) return
+    const interval = setInterval(async () => {
+      try {
+        const res = await fetch('/api/process-payment', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ checkPaymentId: pixPaymentId }),
+        })
+        const data = await res.json()
+        if (data.status === 'approved') {
+          clearInterval(interval)
+          onPurchaseRef.current(blockIndexRef.current, quantidadeRef.current)
+          setStep('success')
+          setTimeout(() => onCloseRef.current(), 2500)
+        }
+      } catch { /* keep polling */ }
+    }, 3000)
+    return () => clearInterval(interval)
+  }, [pixPaymentId])
+
+  const onError = (error: { message?: string }) => {
+    setErrorMsg(error?.message || 'Erro no formulário de pagamento.')
+    setStep('error')
+  }
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/30 backdrop-blur-sm">
       <div className="w-full max-w-lg bg-white rounded-2xl shadow-xl border border-gray-100 p-6 sm:p-8 relative max-h-[90vh] overflow-y-auto">
         <button
-          onClick={onCloseRef.current}
+          onClick={() => onCloseRef.current()}
           className="absolute top-4 right-4 w-8 h-8 flex items-center justify-center rounded-full text-text/40 hover:text-text/80 hover:bg-gray-100 transition-colors"
           aria-label="Fechar"
         >
@@ -201,7 +168,7 @@ export default function Modal({ blockIndex, availablePixels, onClose, onPurchase
               </div>
             )}
 
-            <form onSubmit={handleFormSubmit} className="space-y-4">
+            <form onSubmit={handleSubmit} className="space-y-4">
               <div>
                 <label htmlFor="nome" className="block text-sm font-medium text-text/70 mb-1">Nome</label>
                 <input
@@ -264,7 +231,7 @@ export default function Modal({ blockIndex, availablePixels, onClose, onPurchase
           </>
         )}
 
-        {step === 'brick' && (
+        {step === 'brick' && config && (
           <>
             <div className="text-center mb-4">
               <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-primary/10 text-sm font-medium text-text/70 mb-2">
@@ -275,7 +242,23 @@ export default function Modal({ blockIndex, availablePixels, onClose, onPurchase
                 {totalPrice.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
               </p>
             </div>
-            <div id="paymentBrick_container" />
+
+            {mpReady && (
+              <Payment
+                initialization={{ amount: config.amount }}
+                customization={{
+                  paymentMethods: {
+                    maxInstallments: 1,
+                    creditCard: 'all',
+                    debitCard: 'all',
+                    bankTransfer: 'all',
+                  } as any,
+                }}
+                onSubmit={handleSubmitPayment as any}
+                onError={onError as any}
+              />
+            )}
+
             {pixPaymentId && (
               <p className="text-xs text-text/40 text-center mt-3">
                 Ap&oacute;s pagar o Pix, aguarde a confirma&ccedil;&atilde;o autom&aacute;tica.
