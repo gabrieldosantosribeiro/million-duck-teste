@@ -1,276 +1,205 @@
-import { useState, useEffect, FormEvent, useRef } from 'react'
-import { initMercadoPago, Payment } from '@mercadopago/sdk-react'
+import React, { useState, useEffect } from 'react'
+
+const GRID_COLS = 10
+const PIXELS_PER_BLOCK = 10000
 
 interface ModalProps {
   blockIndex: number
-  availablePixels: number
+  revealedPixels: Record<number, Set<number>>
   onClose: () => void
-  onPurchase: (blockIndex: number, quantidade: number) => void
 }
 
-type Step = 'form' | 'brick' | 'success' | 'error'
+type ModalState = 'form' | 'loading' | 'error'
 
-interface BrickConfig {
-  publicKey: string
-  amount: number
-  description: string
-  blockRow: number
-  blockCol: number
-}
-
-function getBlockRowCol(blockIndex: number): [number, number] {
-  return [Math.floor(blockIndex / 10) + 1, (blockIndex % 10) + 1]
-}
-
-export default function Modal({ blockIndex, availablePixels, onClose, onPurchase }: ModalProps) {
-  const [step, setStep] = useState<Step>('form')
+export default function Modal({ blockIndex, revealedPixels, onClose }: ModalProps) {
+  const [state, setState] = useState<ModalState>('form')
   const [nome, setNome] = useState('')
   const [email, setEmail] = useState('')
-  const [quantidade, setQuantidade] = useState(1)
+  const [quantidade, setQuantidade] = useState(100)
   const [errorMsg, setErrorMsg] = useState('')
-  const [config, setConfig] = useState<BrickConfig | null>(null)
-  const [loading, setLoading] = useState(false)
-  const [pixPaymentId, setPixPaymentId] = useState<number | null>(null)
-  const [mpReady, setMpReady] = useState(false)
 
-  const onPurchaseRef = useRef(onPurchase)
-  onPurchaseRef.current = onPurchase
-  const onCloseRef = useRef(onClose)
-  onCloseRef.current = onClose
-  const blockIndexRef = useRef(blockIndex)
-  blockIndexRef.current = blockIndex
-  const quantidadeRef = useRef(quantidade)
-  quantidadeRef.current = quantidade
+  const row = Math.floor(blockIndex / GRID_COLS) + 1
+  const col = (blockIndex % GRID_COLS) + 1
+  const revealed = revealedPixels[blockIndex]?.size ?? 0
+  const available = PIXELS_PER_BLOCK - revealed
+  const total = quantidade * 1
 
-  const [blockRow, blockCol] = getBlockRowCol(blockIndex)
-  const totalPrice = quantidade
-
+  // Close on Escape
   useEffect(() => {
-    if (!config || mpReady) return
-    initMercadoPago(config.publicKey)
-    setMpReady(true)
-  }, [config, mpReady])
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose()
+    }
+    window.addEventListener('keydown', handler)
+    return () => window.removeEventListener('keydown', handler)
+  }, [onClose])
 
-  const handleSubmit = async (e: FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
+    if (!nome.trim() || !email.trim() || quantidade < 1) return
+
+    setState('loading')
     setErrorMsg('')
 
-    if (!nome.trim()) { setErrorMsg('Informe seu nome.'); setStep('error'); return }
-    if (!email.trim() || !/\S+@\S+\.\S+/.test(email)) { setErrorMsg('Informe um e-mail válido.'); setStep('error'); return }
-    if (quantidade < 1 || quantidade > availablePixels) { setErrorMsg(`Escolha entre 1 e ${availablePixels} pixels.`); setStep('error'); return }
-
-    setLoading(true)
     try {
       const res = await fetch('/api/criar-preferencia', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ nome: nome.trim(), email: email.trim(), quantidade, blockIndex }),
+        body: JSON.stringify({ nome, email, quantidade, blockIndex }),
       })
+
       if (!res.ok) {
-        const errData = await res.json().catch(() => ({}))
-        throw new Error(errData.error || 'Erro ao inicializar pagamento.')
+        const err = await res.json().catch(() => ({}))
+        throw new Error(err.error || `Erro ${res.status}`)
       }
-      const data: BrickConfig = await res.json()
-      setConfig(data)
-      setStep('brick')
-    } catch (err) {
-      setErrorMsg(err instanceof Error ? err.message : 'Erro inesperado.')
-      setStep('error')
-    } finally {
-      setLoading(false)
+
+      const data = await res.json()
+      if (!data.checkoutUrl) throw new Error('URL de pagamento não recebida.')
+
+      window.location.href = data.checkoutUrl
+    } catch (err: unknown) {
+      setState('error')
+      setErrorMsg(err instanceof Error ? err.message : 'Erro desconhecido. Tente novamente.')
     }
-  }
-
-  const handleSubmitPayment = async (param: {
-    selectedPaymentMethod: string
-    formData: Record<string, unknown>
-  }) => {
-    const body: Record<string, unknown> = {
-      ...param.formData,
-      amount: config!.amount,
-      email,
-      nome,
-      description: config!.description,
-    }
-    const res = await fetch('/api/process-payment', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    })
-    const data = await res.json()
-    if (!res.ok) throw new Error(data.error)
-
-    if (param.selectedPaymentMethod === 'bank_transfer') {
-      setPixPaymentId(data.id)
-      return
-    }
-
-    if (data.status === 'approved') {
-      onPurchaseRef.current(blockIndexRef.current, quantidadeRef.current)
-      setStep('success')
-      setTimeout(() => onCloseRef.current(), 2500)
-    } else {
-      throw new Error(`Pagamento ${data.status}: ${data.statusDetail || ''}`)
-    }
-  }
-
-  useEffect(() => {
-    if (!pixPaymentId) return
-    const interval = setInterval(async () => {
-      try {
-        const res = await fetch('/api/process-payment', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ checkPaymentId: pixPaymentId }),
-        })
-        const data = await res.json()
-        if (data.status === 'approved') {
-          clearInterval(interval)
-          onPurchaseRef.current(blockIndexRef.current, quantidadeRef.current)
-          setStep('success')
-          setTimeout(() => onCloseRef.current(), 2500)
-        }
-      } catch { /* keep polling */ }
-    }, 3000)
-    return () => clearInterval(interval)
-  }, [pixPaymentId])
-
-  const onError = (error: { message?: string }) => {
-    setErrorMsg(error?.message || 'Erro no formulário de pagamento.')
-    setStep('error')
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/30 backdrop-blur-sm">
-      <div className="w-full max-w-lg bg-white rounded-2xl shadow-xl border border-gray-100 p-6 sm:p-8 relative max-h-[90vh] overflow-y-auto">
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center p-4"
+      onClick={(e) => { if (e.target === e.currentTarget) onClose() }}
+    >
+      {/* Backdrop */}
+      <div className="absolute inset-0 bg-black/30 backdrop-blur-sm" />
+
+      {/* Modal */}
+      <div className="relative bg-white rounded-2xl shadow-2xl w-full max-w-md p-6 sm:p-8">
+
+        {/* Close button */}
         <button
-          onClick={() => onCloseRef.current()}
-          className="absolute top-4 right-4 w-8 h-8 flex items-center justify-center rounded-full text-text/40 hover:text-text/80 hover:bg-gray-100 transition-colors"
+          onClick={onClose}
+          className="absolute top-4 right-4 w-8 h-8 flex items-center justify-center rounded-full text-gray-400 hover:text-gray-600 hover:bg-gray-100 transition-colors"
           aria-label="Fechar"
         >
           <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-            <path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+            <path d="M12 4L4 12M4 4l8 8" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
           </svg>
         </button>
 
-        {(step === 'form' || step === 'error') && (
-          <>
-            <div className="text-center mb-6">
-              <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-primary/10 text-sm font-medium text-text/70 mb-3">
-                Bloco {blockRow} &times; {blockCol}
-              </div>
-              <h2 className="text-xl font-bold text-text">Comprar Pixels</h2>
-            </div>
-
-            {step === 'error' && errorMsg && (
-              <div className="mb-4 px-4 py-3 rounded-lg bg-red-50 border border-red-100 text-sm text-red-700">
-                {errorMsg}
-              </div>
-            )}
-
-            <form onSubmit={handleSubmit} className="space-y-4">
-              <div>
-                <label htmlFor="nome" className="block text-sm font-medium text-text/70 mb-1">Nome</label>
-                <input
-                  id="nome"
-                  type="text"
-                  value={nome}
-                  onChange={e => { setNome(e.target.value); setStep('form') }}
-                  placeholder="Seu nome"
-                  className="w-full px-4 py-2.5 rounded-xl border border-gray-200 bg-white text-text placeholder:text-text/30 focus:outline-none focus:ring-2 focus:ring-primary/40 focus:border-primary transition-all text-sm"
-                  disabled={loading}
-                />
-              </div>
-              <div>
-                <label htmlFor="email" className="block text-sm font-medium text-text/70 mb-1">E-mail</label>
-                <input
-                  id="email"
-                  type="email"
-                  value={email}
-                  onChange={e => { setEmail(e.target.value); setStep('form') }}
-                  placeholder="seu@email.com"
-                  className="w-full px-4 py-2.5 rounded-xl border border-gray-200 bg-white text-text placeholder:text-text/30 focus:outline-none focus:ring-2 focus:ring-primary/40 focus:border-primary transition-all text-sm"
-                  disabled={loading}
-                />
-              </div>
-              <div>
-                <label htmlFor="quantidade" className="block text-sm font-medium text-text/70 mb-1">Quantidade de Pixels</label>
-                <input
-                  id="quantidade"
-                  type="number"
-                  min={1}
-                  max={availablePixels}
-                  value={quantidade}
-                  onChange={e => { setQuantidade(Math.max(1, Math.min(availablePixels, parseInt(e.target.value) || 1))); setStep('form') }}
-                  className="w-full px-4 py-2.5 rounded-xl border border-gray-200 bg-white text-text placeholder:text-text/30 focus:outline-none focus:ring-2 focus:ring-primary/40 focus:border-primary transition-all text-sm"
-                  disabled={loading}
-                />
-                <p className="text-xs text-text/40 mt-1">{availablePixels} pixels disponíveis neste bloco</p>
-              </div>
-              <div className="bg-gray-50 rounded-xl px-4 py-3 flex items-center justify-between">
-                <span className="text-sm text-text/60">Valor total</span>
-                <span className="text-lg font-bold text-text">
-                  {totalPrice.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
-                </span>
-              </div>
-              <button
-                type="submit"
-                disabled={loading}
-                className="w-full py-3 rounded-xl bg-primary text-text font-bold text-sm hover:brightness-95 disabled:opacity-60 disabled:cursor-not-allowed transition-all flex items-center justify-center gap-2"
-              >
-                {loading ? (
-                  <>
-                    <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24" fill="none">
-                      <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" strokeDasharray="31.4 31.4" strokeLinecap="round" />
-                    </svg>
-                    Aguarde...
-                  </>
-                ) : 'Continuar para pagamento'}
-              </button>
-            </form>
-          </>
-        )}
-
-        {step === 'brick' && config && (
-          <>
-            <div className="text-center mb-4">
-              <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-primary/10 text-sm font-medium text-text/70 mb-2">
-                Bloco {blockRow} &times; {blockCol}
-              </div>
-              <h2 className="text-xl font-bold text-text">Finalizar Pagamento</h2>
-              <p className="text-sm text-text/50 mt-1">
-                {totalPrice.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
-              </p>
-            </div>
-
-            {mpReady && (
-              <Payment
-                initialization={{ amount: config.amount }}
-                locale="pt-BR"
-                customization={undefined as any}
-                onSubmit={handleSubmitPayment as any}
-                onError={onError as any}
-              />
-            )}
-
-            {pixPaymentId && (
-              <p className="text-xs text-text/40 text-center mt-3">
-                Ap&oacute;s pagar o Pix, aguarde a confirma&ccedil;&atilde;o autom&aacute;tica.
-              </p>
-            )}
-          </>
-        )}
-
-        {step === 'success' && (
-          <div className="text-center py-8">
-            <div className="w-16 h-16 rounded-full bg-green-100 flex items-center justify-center mx-auto mb-4">
-              <svg width="32" height="32" viewBox="0 0 24 24" fill="none">
-                <path d="M5 13l4 4L19 7" stroke="#22c55e" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
-              </svg>
-            </div>
-            <h2 className="text-xl font-bold text-text mb-2">Pagamento Confirmado!</h2>
-            <p className="text-sm text-text/50">{quantidade} pixel{quantidade > 1 ? 's' : ''} revelado{quantidade > 1 ? 's' : ''} no bloco {blockRow}&times;{blockCol}.</p>
+        {/* Header */}
+        <div className="mb-6">
+          <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-[#FFF4B8] text-[#9A6B00] text-xs font-medium mb-3">
+            <span className="w-1.5 h-1.5 rounded-full bg-[#FFD43B]" />
+            Bloco {row} × {col}
           </div>
+          <h2 className="text-xl font-bold text-[#1F1F1F] tracking-tight">
+            Comprar pixels
+          </h2>
+          <p className="text-sm text-gray-500 mt-1">
+            {available.toLocaleString('pt-BR')} pixels disponíveis neste bloco · R$ 1,00 cada
+          </p>
+        </div>
+
+        {state === 'error' && (
+          <div className="mb-4 p-3 rounded-xl bg-red-50 border border-red-100 text-sm text-red-600">
+            {errorMsg}
+            <button
+              onClick={() => setState('form')}
+              className="block mt-1 text-xs underline text-red-500"
+            >
+              Tentar novamente
+            </button>
+          </div>
+        )}
+
+        {state === 'loading' ? (
+          <div className="flex flex-col items-center justify-center py-12 gap-4">
+            <div className="w-10 h-10 rounded-full border-2 border-[#FFD43B] border-t-transparent animate-spin" />
+            <p className="text-sm text-gray-500">Redirecionando para o Mercado Pago…</p>
+          </div>
+        ) : (
+          <form onSubmit={handleSubmit} className="space-y-4">
+            {/* Nome */}
+            <div>
+              <label className="block text-sm font-medium text-[#1F1F1F] mb-1.5">
+                Nome
+              </label>
+              <input
+                type="text"
+                required
+                value={nome}
+                onChange={(e) => setNome(e.target.value)}
+                placeholder="Seu nome"
+                className="w-full px-4 py-2.5 rounded-xl border border-gray-200 text-sm text-[#1F1F1F] placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-[#FFD43B] focus:border-transparent transition-all"
+              />
+            </div>
+
+            {/* Email */}
+            <div>
+              <label className="block text-sm font-medium text-[#1F1F1F] mb-1.5">
+                E-mail
+              </label>
+              <input
+                type="email"
+                required
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                placeholder="seu@email.com"
+                className="w-full px-4 py-2.5 rounded-xl border border-gray-200 text-sm text-[#1F1F1F] placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-[#FFD43B] focus:border-transparent transition-all"
+              />
+            </div>
+
+            {/* Quantidade */}
+            <div>
+              <label className="block text-sm font-medium text-[#1F1F1F] mb-1.5">
+                Quantidade de pixels
+              </label>
+              <input
+                type="number"
+                required
+                min={1}
+                max={available}
+                value={quantidade}
+                onChange={(e) => setQuantidade(Math.min(available, Math.max(1, parseInt(e.target.value) || 1)))}
+                className="w-full px-4 py-2.5 rounded-xl border border-gray-200 text-sm text-[#1F1F1F] focus:outline-none focus:ring-2 focus:ring-[#FFD43B] focus:border-transparent transition-all"
+              />
+              <div className="flex gap-2 mt-2">
+                {[10, 100, 500, 1000].map((preset) => (
+                  <button
+                    key={preset}
+                    type="button"
+                    onClick={() => setQuantidade(Math.min(available, preset))}
+                    className={`flex-1 py-1 text-xs rounded-lg border transition-all font-medium ${
+                      quantidade === preset
+                        ? 'bg-[#FFD43B] border-[#FFD43B] text-[#1F1F1F]'
+                        : 'bg-white border-gray-200 text-gray-500 hover:border-[#FFD43B] hover:text-[#1F1F1F]'
+                    }`}
+                  >
+                    {preset}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Total */}
+            <div className="flex items-center justify-between py-3 px-4 rounded-xl bg-[#FFF4B8]">
+              <span className="text-sm text-[#9A6B00]">Total</span>
+              <span className="text-lg font-bold text-[#1F1F1F]">
+                R$ {total.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+              </span>
+            </div>
+
+            {/* Submit */}
+            <button
+              type="submit"
+              disabled={quantidade < 1 || quantidade > available || !nome.trim() || !email.trim()}
+              className="w-full py-3 rounded-xl bg-[#FFD43B] text-[#1F1F1F] font-semibold text-sm hover:bg-[#f5c800] active:scale-[0.98] transition-all disabled:opacity-50 disabled:cursor-not-allowed shadow-sm"
+            >
+              Pagar com Mercado Pago
+            </button>
+
+            <p className="text-center text-xs text-gray-400">
+              Pagamento seguro via Mercado Pago · Os pixels são revelados após aprovação
+            </p>
+          </form>
         )}
       </div>
     </div>

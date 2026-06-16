@@ -1,172 +1,170 @@
-import { useRef, useEffect, useState, useCallback } from 'react'
+import React, { useRef, useEffect, useState, useCallback } from 'react'
+
+const GRID_COLS = 10
+const GRID_ROWS = 10
+const CANVAS_SIZE = 1000
+const BLOCK_SIZE = CANVAS_SIZE / GRID_COLS // 100px per block
+const PIXELS_PER_BLOCK = BLOCK_SIZE * BLOCK_SIZE // 10.000 pixels
 
 interface PixelGridProps {
   revealedPixels: Record<number, Set<number>>
-  imageUrl: string
-  selectedBlock: number | null
   onBlockClick: (blockIndex: number) => void
 }
 
-const GRID_SIZE = 10
-const BLOCK_SIZE = 100
-const CANVAS_SIZE = 1000
-
-function getBlockIndex(row: number, col: number): number {
-  return row * GRID_SIZE + col
-}
-
-function getBlockRowCol(blockIndex: number): [number, number] {
-  return [Math.floor(blockIndex / GRID_SIZE), blockIndex % GRID_SIZE]
-}
-
-export default function PixelGrid({ revealedPixels, imageUrl, selectedBlock, onBlockClick }: PixelGridProps) {
+export default function PixelGrid({ revealedPixels, onBlockClick }: PixelGridProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
-  const imgRef = useRef<HTMLImageElement | null>(null)
-  const animFrameRef = useRef<number>(0)
+  const imageRef = useRef<HTMLImageElement | null>(null)
+  const [imageLoaded, setImageLoaded] = useState(false)
   const [hoveredBlock, setHoveredBlock] = useState<number | null>(null)
-  const [imgLoaded, setImgLoaded] = useState(false)
-  const [containerWidth, setContainerWidth] = useState(0)
-  const containerRef = useRef<HTMLDivElement>(null)
+  const [selectedBlock, setSelectedBlock] = useState<number | null>(null)
 
+  // Load the secret image
   useEffect(() => {
     const img = new Image()
     img.crossOrigin = 'anonymous'
-    img.src = imageUrl
+    img.src = '/pato.png'
     img.onload = () => {
-      imgRef.current = img
-      setImgLoaded(true)
+      imageRef.current = img
+      setImageLoaded(true)
     }
     img.onerror = () => {
-      setImgLoaded(true)
-    }
-  }, [imageUrl])
+      // Image not found — create a placeholder colored image
+      const offscreen = document.createElement('canvas')
+      offscreen.width = CANVAS_SIZE
+      offscreen.height = CANVAS_SIZE
+      const ctx = offscreen.getContext('2d')!
+      // Gradient placeholder
+      const grad = ctx.createRadialGradient(500, 500, 50, 500, 500, 600)
+      grad.addColorStop(0, '#FFD43B')
+      grad.addColorStop(0.5, '#FF8C00')
+      grad.addColorStop(1, '#FF4500')
+      ctx.fillStyle = grad
+      ctx.fillRect(0, 0, CANVAS_SIZE, CANVAS_SIZE)
+      // Draw duck silhouette hint
+      ctx.fillStyle = 'rgba(255,255,255,0.3)'
+      ctx.beginPath()
+      ctx.ellipse(500, 550, 280, 220, 0, 0, Math.PI * 2)
+      ctx.fill()
+      ctx.beginPath()
+      ctx.ellipse(620, 340, 130, 110, -0.3, 0, Math.PI * 2)
+      ctx.fill()
 
-  useEffect(() => {
-    if (!containerRef.current) return
-    const observer = new ResizeObserver(entries => {
-      for (const entry of entries) {
-        setContainerWidth(entry.contentRect.width)
+      const fakeImg = new Image()
+      fakeImg.src = offscreen.toDataURL()
+      fakeImg.onload = () => {
+        imageRef.current = fakeImg
+        setImageLoaded(true)
       }
-    })
-    observer.observe(containerRef.current)
-    return () => observer.disconnect()
+    }
   }, [])
 
   const drawCanvas = useCallback(() => {
     const canvas = canvasRef.current
-    if (!canvas) return
-    const ctx = canvas.getContext('2d')
-    if (!ctx) return
+    if (!canvas || !imageLoaded) return
+    const ctx = canvas.getContext('2d')!
+    const img = imageRef.current
 
-    ctx.clearRect(0, 0, CANVAS_SIZE, CANVAS_SIZE)
-
+    // White base
     ctx.fillStyle = '#ffffff'
     ctx.fillRect(0, 0, CANVAS_SIZE, CANVAS_SIZE)
 
-    const img = imgRef.current
-    const hasImage = img && img.complete && img.naturalWidth > 0
+    // Draw revealed pixels from the secret image
+    if (img && Object.keys(revealedPixels).length > 0) {
+      // Draw image offscreen to sample colors
+      const offscreen = document.createElement('canvas')
+      offscreen.width = CANVAS_SIZE
+      offscreen.height = CANVAS_SIZE
+      const offCtx = offscreen.getContext('2d')!
+      offCtx.drawImage(img, 0, 0, CANVAS_SIZE, CANVAS_SIZE)
+      const imageData = offCtx.getImageData(0, 0, CANVAS_SIZE, CANVAS_SIZE)
 
-    for (let blockIdx = 0; blockIdx < 100; blockIdx++) {
-      const [blockRow, blockCol] = getBlockRowCol(blockIdx)
-      const blockStartX = blockCol * BLOCK_SIZE
-      const blockStartY = blockRow * BLOCK_SIZE
-      const revealed = revealedPixels[blockIdx]
+      for (const [blockIdxStr, pixelSet] of Object.entries(revealedPixels)) {
+        const blockIdx = parseInt(blockIdxStr)
+        const blockRow = Math.floor(blockIdx / GRID_COLS)
+        const blockCol = blockIdx % GRID_COLS
+        const blockStartX = blockCol * BLOCK_SIZE
+        const blockStartY = blockRow * BLOCK_SIZE
 
-      if (!revealed || revealed.size === 0) continue
+        for (const localPixelIdx of pixelSet) {
+          const localRow = Math.floor(localPixelIdx / BLOCK_SIZE)
+          const localCol = localPixelIdx % BLOCK_SIZE
+          const globalX = blockStartX + localCol
+          const globalY = blockStartY + localRow
 
-      if (hasImage) {
-        const tempCanvas = document.createElement('canvas')
-        tempCanvas.width = BLOCK_SIZE
-        tempCanvas.height = BLOCK_SIZE
-        const tempCtx = tempCanvas.getContext('2d')
-        if (!tempCtx) continue
-        tempCtx.drawImage(img, blockStartX, blockStartY, BLOCK_SIZE, BLOCK_SIZE, 0, 0, BLOCK_SIZE, BLOCK_SIZE)
-        const imageData = tempCtx.getImageData(0, 0, BLOCK_SIZE, BLOCK_SIZE)
-
-        ctx.save()
-        const revealedArray = Array.from(revealed)
-        for (const pixelIdx of revealedArray) {
-          const px = pixelIdx % BLOCK_SIZE
-          const py = Math.floor(pixelIdx / BLOCK_SIZE)
-          const dataIdx = (py * BLOCK_SIZE + px) * 4
+          const dataIdx = (globalY * CANVAS_SIZE + globalX) * 4
           const r = imageData.data[dataIdx]
           const g = imageData.data[dataIdx + 1]
           const b = imageData.data[dataIdx + 2]
-          const a = imageData.data[dataIdx + 3]
-          ctx.fillStyle = a === 0 ? '#ffffff' : `rgb(${r},${g},${b})`
-          ctx.fillRect(blockStartX + px, blockStartY + py, 1, 1)
+
+          ctx.fillStyle = `rgb(${r},${g},${b})`
+          ctx.fillRect(globalX, globalY, 1, 1)
         }
-        ctx.restore()
       }
     }
 
-    ctx.beginPath()
+    // Grid lines
     ctx.strokeStyle = 'rgba(200,200,200,0.4)'
-    ctx.lineWidth = 1
-    for (let i = 0; i <= GRID_SIZE; i++) {
-      const pos = i * BLOCK_SIZE
-      ctx.moveTo(pos, 0)
-      ctx.lineTo(pos, CANVAS_SIZE)
-      ctx.moveTo(0, pos)
-      ctx.lineTo(CANVAS_SIZE, pos)
+    ctx.lineWidth = 0.5
+    for (let i = 0; i <= GRID_COLS; i++) {
+      ctx.beginPath()
+      ctx.moveTo(i * BLOCK_SIZE, 0)
+      ctx.lineTo(i * BLOCK_SIZE, CANVAS_SIZE)
+      ctx.stroke()
     }
-    ctx.stroke()
-
-    for (let blockIdx = 0; blockIdx < 100; blockIdx++) {
-      const [blockRow, blockCol] = getBlockRowCol(blockIdx)
-      const x = blockCol * BLOCK_SIZE
-      const y = blockRow * BLOCK_SIZE
-      const revealed = revealedPixels[blockIdx]
-      const isFull = revealed && revealed.size >= BLOCK_SIZE * BLOCK_SIZE
-
-      if (!isFull) {
-        if (blockIdx === hoveredBlock) {
-          ctx.fillStyle = 'rgba(255,212,59,0.08)'
-          ctx.fillRect(x, y, BLOCK_SIZE, BLOCK_SIZE)
-          ctx.strokeStyle = '#FFD43B'
-          ctx.lineWidth = 2
-          ctx.strokeRect(x + 1, y + 1, BLOCK_SIZE - 2, BLOCK_SIZE - 2)
-        }
-        if (blockIdx === selectedBlock) {
-          ctx.fillStyle = 'rgba(255,212,59,0.08)'
-          ctx.fillRect(x, y, BLOCK_SIZE, BLOCK_SIZE)
-          ctx.strokeStyle = '#FFD43B'
-          ctx.lineWidth = 3
-          ctx.strokeRect(x + 1.5, y + 1.5, BLOCK_SIZE - 3, BLOCK_SIZE - 3)
-        }
-      }
+    for (let j = 0; j <= GRID_ROWS; j++) {
+      ctx.beginPath()
+      ctx.moveTo(0, j * BLOCK_SIZE)
+      ctx.lineTo(CANVAS_SIZE, j * BLOCK_SIZE)
+      ctx.stroke()
     }
-  }, [revealedPixels, hoveredBlock, selectedBlock])
+
+    // Hover highlight
+    if (hoveredBlock !== null) {
+      const row = Math.floor(hoveredBlock / GRID_COLS)
+      const col = hoveredBlock % GRID_COLS
+      ctx.strokeStyle = 'rgba(255,212,59,0.6)'
+      ctx.lineWidth = 2
+      ctx.strokeRect(col * BLOCK_SIZE + 1, row * BLOCK_SIZE + 1, BLOCK_SIZE - 2, BLOCK_SIZE - 2)
+      ctx.fillStyle = 'rgba(255,212,59,0.05)'
+      ctx.fillRect(col * BLOCK_SIZE + 1, row * BLOCK_SIZE + 1, BLOCK_SIZE - 2, BLOCK_SIZE - 2)
+    }
+
+    // Selected highlight
+    if (selectedBlock !== null) {
+      const row = Math.floor(selectedBlock / GRID_COLS)
+      const col = selectedBlock % GRID_COLS
+      ctx.strokeStyle = '#FFD43B'
+      ctx.lineWidth = 3
+      ctx.strokeRect(col * BLOCK_SIZE + 1.5, row * BLOCK_SIZE + 1.5, BLOCK_SIZE - 3, BLOCK_SIZE - 3)
+      ctx.fillStyle = 'rgba(255,212,59,0.08)'
+      ctx.fillRect(col * BLOCK_SIZE + 1.5, row * BLOCK_SIZE + 1.5, BLOCK_SIZE - 3, BLOCK_SIZE - 3)
+    }
+  }, [imageLoaded, revealedPixels, hoveredBlock, selectedBlock])
 
   useEffect(() => {
-    if (!imgLoaded) return
-    animFrameRef.current = requestAnimationFrame(drawCanvas)
-    return () => cancelAnimationFrame(animFrameRef.current)
-  }, [imgLoaded, drawCanvas])
+    drawCanvas()
+  }, [drawCanvas])
 
-  const getCanvasCoord = (clientX: number, clientY: number): { x: number; y: number } | null => {
-    const canvas = canvasRef.current
-    if (!canvas) return null
+  const getBlockFromEvent = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    const canvas = canvasRef.current!
     const rect = canvas.getBoundingClientRect()
     const scaleX = CANVAS_SIZE / rect.width
     const scaleY = CANVAS_SIZE / rect.height
-    return {
-      x: (clientX - rect.left) * scaleX,
-      y: (clientY - rect.top) * scaleY,
-    }
-  }
-
-  const getBlockFromCoord = (x: number, y: number): number | null => {
-    if (x < 0 || x >= CANVAS_SIZE || y < 0 || y >= CANVAS_SIZE) return null
+    const x = (e.clientX - rect.left) * scaleX
+    const y = (e.clientY - rect.top) * scaleY
     const col = Math.floor(x / BLOCK_SIZE)
     const row = Math.floor(y / BLOCK_SIZE)
-    return getBlockIndex(row, col)
+    if (col < 0 || col >= GRID_COLS || row < 0 || row >= GRID_ROWS) return null
+    return row * GRID_COLS + col
+  }
+
+  const isBlockFull = (blockIdx: number) => {
+    const revealed = revealedPixels[blockIdx]
+    return revealed && revealed.size >= PIXELS_PER_BLOCK
   }
 
   const handleMouseMove = (e: React.MouseEvent<HTMLCanvasElement>) => {
-    const coord = getCanvasCoord(e.clientX, e.clientY)
-    if (!coord) return
-    const block = getBlockFromCoord(coord.x, coord.y)
+    const block = getBlockFromEvent(e)
     setHoveredBlock(block)
   }
 
@@ -175,29 +173,38 @@ export default function PixelGrid({ revealedPixels, imageUrl, selectedBlock, onB
   }
 
   const handleClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
-    const coord = getCanvasCoord(e.clientX, e.clientY)
-    if (!coord) return
-    const block = getBlockFromCoord(coord.x, coord.y)
+    const block = getBlockFromEvent(e)
     if (block === null) return
-    const revealed = revealedPixels[block]
-    if (revealed && revealed.size >= BLOCK_SIZE * BLOCK_SIZE) return
+    if (isBlockFull(block)) return
+    setSelectedBlock(block)
     onBlockClick(block)
   }
 
-  const scale = containerWidth > 0 ? Math.min(containerWidth, CANVAS_SIZE) / CANVAS_SIZE : 1
+  const getCursorStyle = () => {
+    if (hoveredBlock === null) return 'default'
+    if (isBlockFull(hoveredBlock)) return 'not-allowed'
+    return 'pointer'
+  }
 
   return (
-    <div ref={containerRef} className="w-full flex justify-center">
+    <div className="w-full max-w-[600px] mx-auto">
       <canvas
         ref={canvasRef}
         width={CANVAS_SIZE}
         height={CANVAS_SIZE}
-        style={{ width: CANVAS_SIZE * scale, height: CANVAS_SIZE * scale, maxWidth: '100%', cursor: 'pointer' }}
-        className="rounded-lg shadow-sm border border-gray-100"
-        onClick={handleClick}
+        className="w-full h-auto rounded-lg shadow-lg border border-gray-100 canvas-container"
+        style={{ cursor: getCursorStyle() }}
         onMouseMove={handleMouseMove}
         onMouseLeave={handleMouseLeave}
+        onClick={handleClick}
       />
+      {!imageLoaded && (
+        <div className="absolute inset-0 flex items-center justify-center">
+          <div className="text-gray-400 text-sm">Carregando...</div>
+        </div>
+      )}
     </div>
   )
 }
+
+export { PIXELS_PER_BLOCK }
