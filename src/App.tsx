@@ -132,6 +132,14 @@ export default function App() {
             onBlockClick={(blockIndex) => setSelectedBlock(blockIndex)}
           />
 
+          {/* BOTÃO DE TESTE — remover em produção */}
+          <button
+            onClick={() => handlePurchase(55, 2000)}
+            className="mt-4 w-full py-2 bg-gray-100 text-sm rounded-lg text-gray-500 hover:bg-gray-200 transition-colors"
+          >
+            [TESTE] Revelar 2000 pixels no bloco central
+          </button>
+
           {loading && (
             <div className="absolute inset-0 flex items-center justify-center bg-white/80 backdrop-blur-sm rounded-lg">
               <div className="flex flex-col items-center gap-3">
