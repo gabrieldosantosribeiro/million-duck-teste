@@ -8,20 +8,26 @@ const GRID_SIZE = 10
 export default function App() {
   const [revealedPixels, setRevealedPixels] = useState<Record<number, Set<number>>>({})
   const [selectedBlock, setSelectedBlock] = useState<number | null>(null)
+  const [loading, setLoading] = useState(true)
 
-  // Count total revealed pixels
   const totalRevealed = Object.values(revealedPixels).reduce(
     (sum, set) => sum + set.size,
     0
   )
 
-  {/* BOTÃO DE TESTE — remover em produção */}
-  <button
-    onClick={() => handlePurchase(0, 500)}
-    className="mt-4 px-4 py-2 bg-gray-100 text-sm rounded-lg text-gray-600 hover:bg-gray-200"
-  >
-    [TESTE] Revelar 500 pixels no bloco 1
-  </button>
+  useEffect(() => {
+    fetch('/api/pixels')
+      .then((r) => r.json())
+      .then((data: Record<string, number[]>) => {
+        const parsed: Record<number, Set<number>> = {}
+        for (const [key, arr] of Object.entries(data)) {
+          parsed[parseInt(key)] = new Set(arr)
+        }
+        setRevealedPixels(parsed)
+      })
+      .catch(console.error)
+      .finally(() => setLoading(false))
+  }, [])
 
   const handlePurchase = useCallback((blockIndex: number, quantity: number) => {
     setRevealedPixels((prev) => {
@@ -29,7 +35,6 @@ export default function App() {
       const allPixels = Array.from({ length: PIXELS_PER_BLOCK }, (_, i) => i)
       const unrevealed = allPixels.filter((i) => !existing.has(i))
 
-      // Fisher-Yates shuffle
       for (let i = unrevealed.length - 1; i > 0; i--) {
         const j = Math.floor(Math.random() * (i + 1))
         ;[unrevealed[i], unrevealed[j]] = [unrevealed[j], unrevealed[i]]
@@ -38,11 +43,21 @@ export default function App() {
       const toReveal = unrevealed.slice(0, quantity)
       toReveal.forEach((idx) => existing.add(idx))
 
-      return { ...prev, [blockIndex]: existing }
+      const updated = { ...prev, [blockIndex]: existing }
+
+      fetch('/api/pixels', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          blockIndex,
+          pixels: Array.from(existing),
+        }),
+      }).catch(console.error)
+
+      return updated
     })
   }, [])
 
-  // Handle return from Mercado Pago
   useEffect(() => {
     const params = new URLSearchParams(window.location.search)
     const status = params.get('status')
@@ -63,8 +78,6 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-white flex flex-col">
-
-      {/* Top status bar */}
       <div className="w-full border-b border-gray-100 py-3">
         <div className="max-w-2xl mx-auto px-4 flex items-center justify-between gap-4">
           <div className="flex items-center gap-2.5">
@@ -85,7 +98,6 @@ export default function App() {
         </div>
       </div>
 
-      {/* Hero */}
       <header className="max-w-2xl mx-auto px-4 pt-10 pb-8 text-center w-full">
         <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-[#FFF4B8] text-[#9A6B00] text-xs font-medium mb-5">
           <span className="w-1.5 h-1.5 rounded-full bg-[#FFD43B] animate-pulse" />
@@ -113,7 +125,6 @@ export default function App() {
         </div>
       </header>
 
-      {/* Grid */}
       <main className="flex-1 max-w-2xl mx-auto px-4 w-full pb-8">
         <div className="relative">
           <PixelGrid
@@ -121,8 +132,16 @@ export default function App() {
             onBlockClick={(blockIndex) => setSelectedBlock(blockIndex)}
           />
 
-          {/* Instruction overlay — shown only when nothing revealed */}
-          {totalRevealed === 0 && (
+          {loading && (
+            <div className="absolute inset-0 flex items-center justify-center bg-white/80 backdrop-blur-sm rounded-lg">
+              <div className="flex flex-col items-center gap-3">
+                <div className="w-8 h-8 rounded-full border-2 border-[#FFD43B] border-t-transparent animate-spin" />
+                <p className="text-xs text-gray-400">Carregando pixels...</p>
+              </div>
+            </div>
+          )}
+
+          {!loading && totalRevealed === 0 && (
             <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
               <div className="bg-white/90 backdrop-blur-sm border border-gray-100 rounded-xl px-5 py-3 shadow-sm text-center">
                 <p className="text-sm font-medium text-[#1F1F1F]">Clique em um bloco para revelar</p>
@@ -132,7 +151,6 @@ export default function App() {
           )}
         </div>
 
-        {/* Block info legend */}
         <div className="mt-6 grid grid-cols-3 gap-3 text-center">
           <div className="p-3 rounded-xl bg-gray-50">
             <div className="text-lg font-bold text-[#1F1F1F]">100</div>
@@ -149,7 +167,6 @@ export default function App() {
         </div>
       </main>
 
-      {/* Footer */}
       <footer className="border-t border-gray-100 py-6">
         <div className="max-w-2xl mx-auto px-4 flex flex-col sm:flex-row items-center justify-between gap-2 text-xs text-gray-400">
           <span>🦆 Million Duck — A imagem secreta</span>
@@ -157,7 +174,6 @@ export default function App() {
         </div>
       </footer>
 
-      {/* Modal */}
       {selectedBlock !== null && (
         <Modal
           blockIndex={selectedBlock}
