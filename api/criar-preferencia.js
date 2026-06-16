@@ -53,6 +53,7 @@ export default async function handler(req, res) {
       failure: `${siteUrl}/?status=failure&block=${blockIndex}`,
       pending: `${siteUrl}/?status=pending&block=${blockIndex}`,
     },
+    ...(siteUrl && siteUrl !== 'http://localhost:5173' && { auto_return: 'approved' }),
     auto_return: 'approved',
     metadata: {
       block_index: blockIndex,

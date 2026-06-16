@@ -15,6 +15,14 @@ export default function App() {
     0
   )
 
+  {/* BOTÃO DE TESTE — remover em produção */}
+  <button
+    onClick={() => handlePurchase(0, 500)}
+    className="mt-4 px-4 py-2 bg-gray-100 text-sm rounded-lg text-gray-600 hover:bg-gray-200"
+  >
+    [TESTE] Revelar 500 pixels no bloco 1
+  </button>
+
   const handlePurchase = useCallback((blockIndex: number, quantity: number) => {
     setRevealedPixels((prev) => {
       const existing = new Set(prev[blockIndex] ?? [])
