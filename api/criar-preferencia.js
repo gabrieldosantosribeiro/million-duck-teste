@@ -1,17 +1,14 @@
 export default async function handler(req, res) {
-  // Only allow POST
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Método não permitido' })
   }
 
-  // CORS headers (if needed for local dev)
   res.setHeader('Access-Control-Allow-Origin', '*')
   res.setHeader('Access-Control-Allow-Methods', 'POST')
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type')
 
   const { nome, email, quantidade, blockIndex } = req.body ?? {}
 
-  // Validate fields
   if (!nome || typeof nome !== 'string' || nome.trim().length < 2) {
     return res.status(400).json({ error: 'Nome inválido.' })
   }
@@ -26,7 +23,7 @@ export default async function handler(req, res) {
   }
 
   const accessToken = process.env.MP_ACCESS_TOKEN
-  const siteUrl = process.env.SITE_URL || 'http://localhost:5173'
+  const siteUrl = (process.env.SITE_URL || 'http://localhost:5173').replace(/\/$/, '')
   const webhookUrl = process.env.MP_WEBHOOK_URL || null
   const isSandbox = process.env.MP_SANDBOX === 'true'
 
@@ -41,12 +38,10 @@ export default async function handler(req, res) {
     items: [
       {
         id: `block-${blockIndex}`,
-        title: `${quantidade} pixel${quantidade > 1 ? 's' : ''} — Bloco ${row}×${col} | Million Duck`,
-        description: `Revelação de ${quantidade} pixel(s) no bloco (${row}, ${col}) da imagem secreta`,
-        category_id: 'art',
+        title: `${quantidade} pixel${quantidade > 1 ? 's' : ''} — Bloco ${row}x${col} | Million Duck`,
         quantity: 1,
         currency_id: 'BRL',
-        unit_price: Number(quantidade),
+        unit_price: parseFloat(quantidade.toFixed(2)), // garante float
       },
     ],
     payer: {
@@ -54,20 +49,17 @@ export default async function handler(req, res) {
       email: email.trim().toLowerCase(),
     },
     back_urls: {
-      success: `${siteUrl}?status=success&block=${blockIndex}&qty=${quantidade}`,
-      failure: `${siteUrl}?status=failure&block=${blockIndex}`,
-      pending: `${siteUrl}?status=pending&block=${blockIndex}`,
+      success: `${siteUrl}/?status=success&block=${blockIndex}&qty=${quantidade}`,
+      failure: `${siteUrl}/?status=failure&block=${blockIndex}`,
+      pending: `${siteUrl}/?status=pending&block=${blockIndex}`,
     },
     auto_return: 'approved',
     metadata: {
       block_index: blockIndex,
       pixel_quantity: quantidade,
-      buyer_name: nome.trim(),
-      buyer_email: email.trim().toLowerCase(),
     },
-    ...(webhookUrl && { notification_url: webhookUrl }),
-    statement_descriptor: 'MILLION DUCK',
     external_reference: `block-${blockIndex}-${Date.now()}`,
+    ...(webhookUrl && { notification_url: webhookUrl }),
   }
 
   try {
@@ -80,22 +72,22 @@ export default async function handler(req, res) {
       body: JSON.stringify(preferenceBody),
     })
 
+    const preference = await mpResponse.json()
+
     if (!mpResponse.ok) {
-      const errData = await mpResponse.json().catch(() => ({}))
-      console.error('Mercado Pago error:', errData)
+      console.error('MP error:', JSON.stringify(preference))
       return res.status(502).json({
         error: 'Erro ao criar preferência no Mercado Pago.',
-        details: errData,
+        details: preference, // agora aparece no console da Vercel
       })
     }
-
-    const preference = await mpResponse.json()
 
     const checkoutUrl = isSandbox
       ? preference.sandbox_init_point
       : preference.init_point
 
     if (!checkoutUrl) {
+      console.error('MP sem checkoutUrl:', JSON.stringify(preference))
       return res.status(502).json({ error: 'URL de checkout não recebida do Mercado Pago.' })
     }
 
@@ -104,7 +96,7 @@ export default async function handler(req, res) {
       preferenceId: preference.id,
     })
   } catch (err) {
-    console.error('Serverless function error:', err)
+    console.error('Erro interno:', err)
     return res.status(500).json({ error: 'Erro interno do servidor.' })
   }
 }
