@@ -82,7 +82,7 @@ export default function App() {
         <div className="max-w-2xl mx-auto px-4 flex items-center justify-between gap-4">
           <div className="flex items-center gap-2.5">
             <span className="text-2xl" role="img" aria-label="pato">🦆</span>
-            <span className="font-bold text-[#1F1F1F] text-sm tracking-tight">MILLION DUCK</span>
+            <span className="font-bold text-[#1F1F1F] text-sm tracking-tight">PATO POBRINHO</span>
           </div>
           <div className="flex items-center gap-2">
             <div className="h-1.5 w-24 sm:w-40 bg-gray-100 rounded-full overflow-hidden">
