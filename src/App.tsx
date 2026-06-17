@@ -105,8 +105,8 @@ export default function App() {
         </div>
 
         <h1 className="text-4xl sm:text-5xl lg:text-6xl font-black text-[#1F1F1F] tracking-tight leading-none mb-4">
-          MILLION<br />
-          <span className="text-[#FFD43B]">DUCK</span>
+          PATO<br />
+          <span className="text-[#FFD43B]">POBRINHO</span>
         </h1>
 
         <p className="text-base sm:text-lg text-gray-500 max-w-sm mx-auto leading-relaxed">
@@ -169,7 +169,7 @@ export default function App() {
 
       <footer className="border-t border-gray-100 py-6">
         <div className="max-w-2xl mx-auto px-4 flex flex-col sm:flex-row items-center justify-between gap-2 text-xs text-gray-400">
-          <span>🦆 Million Duck — A imagem secreta</span>
+          <span>🦆 Pato Pobrinho — A imagem secreta</span>
           <span>Pagamento seguro via Mercado Pago</span>
         </div>
       </footer>
